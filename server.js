@@ -316,7 +316,6 @@ app.get("/api/analytics/topic/:topic", async (req, res) => {
             total.uniqueUsers += click.uniqueUsers;
             total.clicksByDate.push(click.clicksByDate);
             return total;
-
         }, { totalClicks: 0, uniqueUsers: 0, clicksByDate: [] });
 
         const response = {
@@ -332,25 +331,44 @@ app.get("/api/analytics/topic/:topic", async (req, res) => {
     }
 })
 
-app.get("/api/analytics/overall", async (req, res) => {
+app.get("/api/overallAnalytics", async (req, res) => {
     try {
-        const shortUrls = await shortUrlInfo.find();
+        const shortUrls = await shortUrlInfo.find()
+            .populate({
+                path: "osAnalytics",
+                select: "osName uniqueClicks uniqueUsers"
+            })
+            .populate({
+                path: "deviceAnalytics",
+                select: "deviceName uniqueClicks uniqueUsers"
+            })
 
-        const totalClicks = shortUrls
-            .map(shortUrl => shortUrl.urls.totalClicks)
-            .reduce((total, clicks) => total + clicks, 0);
+        const reducedResponse = shortUrls.reduce((total, click) => {
+            total.totalClicks += click.totalClicks;
+            total.uniqueUsers += click.uniqueUsers;
+            total.clicksByDate.push(click.clicksByDate);
+            total.osAnalytics.push(click.osAnalytics);
+            total.deviceAnalytics.push(click.deviceAnalytics);
+            return total;
+        }, { totalClicks: 0, uniqueUsers: 0, clicksByDate: [], osAnalytics: [], deviceAnalytics: [] });
 
-        const uniqueUsers = shortUrls
-            .map(shortUrl => shortUrl.uniqueUsers)
-            .reduce((total, clicks) => total + clicks, 0);
-
-
-
-
+        const response = {
+            totalUrls: shortUrls.length,
+            totalClicks: reducedResponse.totalClicks,
+            uniqueUsers: reducedResponse.uniqueUsers,
+            clicksByDate: reducedResponse.clicksByDate,
+            osType: reducedResponse.osAnalytics,
+            deviceType: reducedResponse.deviceAnalytics
+        }
+        console.log("-------------------");
+        console.log(response);
+        res.status(200).json(response);
     } catch (e) {
-        res.status(400).json(e);
+        res.status(404).json(e.message);
     }
 })
+
+
 app.listen(process.env.PORT || 3000, () => {
     console.log("server started in port 3000");
 });
