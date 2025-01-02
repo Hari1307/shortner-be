@@ -10,27 +10,23 @@ const { rateLimit } = require("express-rate-limit");
 const geoIp = require("geoip-lite");
 const UAParser = require('ua-parser-js');
 const cors = require("cors");
+require('dotenv').config();
 
-const redis = require("redis");
-const redisClient = redis.createClient();
-
-redisClient.on('error', (err) => console.error('Redis Client Error', err));
-
-(async () => {
-    await redisClient.connect();
-})();
+const swaggerUi = require("swagger-ui-express")
+const swaggerFile = require('./swagger-output.json');
+const { redis } = require("./redis");
 
 require('./auth');
 
-mongoose.connect("mongodb://localhost:27017/shortner");
+mongoose.connect(process.env.MONGO_URL);
 
 app.use(cors({
-    origin: 'http://localhost:5173',
+    origin: "http://localhost:5173",
     credentials: true,
 }));
 
 app.use(express.json());
-require('dotenv').config();
+
 
 const limiter = rateLimit({
     windowMs: 60 * 1000, // 1 minutes
@@ -64,8 +60,6 @@ app.get(
     '/auth/google/callback',
     passport.authenticate('google', { failureRedirect: '/' }),
     (req, res) => {
-        // Successful login, redirect to profile
-        console.log(req);
         res.redirect('http://localhost:5173/home');
     }
 );
@@ -74,48 +68,6 @@ app.get("/api/home", isAuthenticated, (req, res) => {
     res.status(200).json({ message: "Welcome to the Shortner!" });
 });
 
-
-app.get("/api/demo", (req, res) => {
-    res.send("Hello welcome , testing the get api" + uniqid());
-})
-
-// app.post("/api/shorten", isAuthenticated, async (req, res) => {
-//     try {
-//         const { fullUrl, customAlias, topic } = req.body;
-//         const newAlias = customAlias !== "" ? customAlias : uniqid();
-//         const shortUrl = `http://localhost:3000/api/shorten/${newAlias}`
-//         const userId = req.user?._id;
-//         const userIp = req.headers['x-forwarded-for']?.split(',')[0] || req.connection.remoteAddress;
-
-//         if (!shortUrl) {
-//             throw new Error('Short URL cannot be null or empty');
-//         }
-
-//         console.log(shortUrl + "===============");
-//         const data = {
-//             fullUrl,
-//             topic,
-//             userId,
-//             userIp,
-//             alias: newAlias,
-//             urls: [{
-//                 shortUrl
-//             }]
-//         }
-
-//         const shortenUrl = await shortUrlInfo.create(data);
-//         console.log(JSON.stringify(shortenUrl));
-//         const response = {
-//             shortUrl: shortenUrl.urls[0].shortUrl,
-//             createdAt: shortenUrl.createdAt,
-//         }
-
-//         res.status(201).json({ response });
-//     } catch (e) {
-//         console.log(e);
-//         res.status(404).json(e);
-//     }
-// });
 
 app.post("/api/shorten", isAuthenticated, async (req, res) => {
     try {
@@ -178,6 +130,9 @@ app.get("/api/shorten", async (req, res) => {
 const updateAnalytics = async (req, alias) => {
     try {
         const shortUrls = await shortUrlInfo.findOne({ alias });
+        if (!shortUrls) {
+            throw new Error('Short URL not found');
+        }
         const userIp = req.headers['x-forwarded-for']?.split(',')[0] || req.connection.remoteAddress;
         const userAgent = req.headers['user-agent'];
         const parser = new UAParser(userAgent);
@@ -241,10 +196,10 @@ const updateAnalytics = async (req, alias) => {
     }
 }
 
-app.get("/api/shorten/:alias", async (req, res) => {
+app.get("/api/shorten/:alias", isAuthenticated, async (req, res) => {
     try {
         const shortUrl = `${req.protocol}://${req.get('host')}${req.originalUrl}`;
-        const cachedFullUrl = await redisClient.get(shortUrl);
+        const cachedFullUrl = await redis.get(shortUrl);
         const alias = req.params.alias;
 
         if (cachedFullUrl) {
@@ -260,7 +215,7 @@ app.get("/api/shorten/:alias", async (req, res) => {
 
         console.log("cache miss for shortUrl");
 
-        await redisClient.setEx(shortUrl, 300, shortUrls.fullUrl);
+        await redis.set(shortUrl, shortUrls.fullUrl, "EX", 300);
 
         await updateAnalytics(req, alias);
 
@@ -272,7 +227,7 @@ app.get("/api/shorten/:alias", async (req, res) => {
 })
 
 
-app.get("/api/analytics/:alias", async (req, res) => {
+app.get("/api/analytics/:alias", isAuthenticated, async (req, res) => {
     try {
         const alias = req.params.alias;
         const shortUrl = await shortUrlInfo.findOne({ alias })
@@ -298,7 +253,7 @@ app.get("/api/analytics/:alias", async (req, res) => {
     }
 })
 
-app.get("/api/analytics/topic/:topic", async (req, res) => {
+app.get("/api/analytics/topic/:topic", isAuthenticated, async (req, res) => {
     try {
         const topic = req.params.topic;
         const shortUrls = await shortUrlInfo.find({ topic });
@@ -331,7 +286,7 @@ app.get("/api/analytics/topic/:topic", async (req, res) => {
     }
 })
 
-app.get("/api/overallAnalytics", async (req, res) => {
+app.get("/api/overallAnalytics", isAuthenticated, async (req, res) => {
     try {
         const shortUrls = await shortUrlInfo.find()
             .populate({
@@ -368,6 +323,8 @@ app.get("/api/overallAnalytics", async (req, res) => {
     }
 })
 
+
+app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerFile))
 
 app.listen(process.env.PORT || 3000, () => {
     console.log("server started in port 3000");
