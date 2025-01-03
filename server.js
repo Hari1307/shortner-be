@@ -18,15 +18,43 @@ const { redis } = require("./redis");
 
 require('./auth');
 
-mongoose.connect(process.env.MONGO_URL);
+
+async function connectToMongoDB() {
+    try {
+        await mongoose.connect(process.env.MONGO_URL, {
+            useNewUrlParser: true,
+            useUnifiedTopology: true,
+            serverSelectionTimeoutMS: 30000, // 30 seconds
+        });
+        console.log('Connected to MongoDB successfully');
+    } catch (error) {
+        console.error('Failed to connect to MongoDB:', error.message);
+        process.exit(1);
+    }
+}
+
+mongoose.connection.on('connected', () => {
+    console.log('Mongoose connection established to MongoDB.');
+});
+
+mongoose.connection.on('error', (err) => {
+    console.error('Mongoose connection error:', err.message);
+});
+
+mongoose.connection.on('disconnected', () => {
+    console.log('Mongoose connection to MongoDB disconnected.');
+});
+
+connectToMongoDB();
 
 app.use(cors({
-    origin: "http://localhost:5173",
+    origin: "https://shortner-fe-eosin.vercel.app/",
     credentials: true,
 }));
 
 app.use(express.json());
 
+app.set('trust proxy', 1);
 
 const limiter = rateLimit({
     windowMs: 60 * 1000, // 1 minutes
@@ -60,7 +88,7 @@ app.get(
     '/auth/google/callback',
     passport.authenticate('google', { failureRedirect: '/' }),
     (req, res) => {
-        res.redirect('http://localhost:5173/home');
+        res.redirect("https://shortner-fe-eosin.vercel.app/home");
     }
 );
 
@@ -80,7 +108,7 @@ app.post("/api/shorten", isAuthenticated, async (req, res) => {
         }
 
         const newAlias = customAlias || uniqid();
-        const shortUrl = `http://localhost:3000/api/shorten/${newAlias}`;
+        const shortUrl = `https://shortner-app.onrender.com/api/shorten/${newAlias}`;
 
         const existingUrl = await shortUrlInfo.findOne({ shortUrl });
         if (existingUrl) {
