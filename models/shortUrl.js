@@ -8,7 +8,7 @@ const userSchema = new Schema({
     updatedAt: { type: Date, default: Date.now }
 })
 
-const user = model("users", userSchema);
+const userModel = model("users", userSchema);
 
 const shortUrlInfoSchema = new Schema({
     fullUrl: { type: String, required: true },
@@ -47,4 +47,4 @@ const shortUrlInfo = model("shortUrlInfos", shortUrlInfoSchema);
 const osTypeModel = model("osTypes", osTypeSchema);
 const deviceTypeModel = model("deviceTypes", deviceTypeSchema);
 
-module.exports = { user, shortUrlInfo, osTypeModel, deviceTypeModel }
+module.exports = { userModel, shortUrlInfo, osTypeModel, deviceTypeModel }

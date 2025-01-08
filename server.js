@@ -15,6 +15,7 @@ require('dotenv').config();
 const swaggerUi = require("swagger-ui-express")
 const swaggerFile = require('./swagger-output.json');
 const { redis } = require("./redis");
+const MongoStore = require("connect-mongo");
 
 require('./auth');
 
@@ -48,7 +49,8 @@ mongoose.connection.on('disconnected', () => {
 connectToMongoDB();
 
 app.use(cors({
-    origin: "https://shortner-fe-eosin.vercel.app/",
+    origin: process.env.frontendUrl,
+    methods: "GET,POST,PUT,DELETE",
     credentials: true,
 }));
 
@@ -69,6 +71,9 @@ app.use(
         secret: 'sessecret5234234',
         resave: false,
         saveUninitialized: true,
+        store: MongoStore.create({
+            mongoUrl:process.env.MONGO_URL
+        })
     })
 );
 app.use(passport.initialize());
@@ -84,16 +89,38 @@ app.get(
     passport.authenticate('google', { scope: ['profile', 'email'] })
 );
 
+// app.get("/login/success", (req, res) => {
+//     if (req.user) {
+//         console.log("inside login success api")
+//         res.status(200).json({
+//             success: true,
+//             message: "Successfully logged in",
+//             user: req.user
+//         })
+//     }
+// })
+
+const home = process.env.frontendUrl + "/home";
+
 app.get(
     '/auth/google/callback',
-    passport.authenticate('google', { failureRedirect: '/' }),
+    passport.authenticate('google', {
+        // successRedirect: home,
+        failureRedirect: '/'
+    }),
     (req, res) => {
-        res.redirect("https://shortner-fe-eosin.vercel.app/home");
+        console.log("inside google callback entry");
+        res.redirect(process.env.frontendUrl + "/home");
     }
 );
 
-app.get("/api/home", isAuthenticated, (req, res) => {
-    res.status(200).json({ message: "Welcome to the Shortner!" });
+app.get("/api/user", (req, res) => {
+    console.log("inside api/home api ")
+    if (req.isAuthenticated()) {
+        res.json( req.user );
+    } else {
+        res.status(401).json({ error: "Unauthorized" });
+    }
 });
 
 
@@ -137,8 +164,9 @@ app.post("/api/shorten", isAuthenticated, async (req, res) => {
     }
 });
 
-app.get("/api/shorten", async (req, res) => {
+app.get("/api/shorten", isAuthenticated,async (req, res) => {
     try {
+                console.log("fetching content data success")
         const response = await shortUrlInfo.find()
             .populate({
                 path: "osAnalytics",
@@ -148,6 +176,7 @@ app.get("/api/shorten", async (req, res) => {
                 path: "deviceAnalytics",
                 select: "deviceName uniqueClicks uniqueUsers"
             })
+        console.log("fetching content data success")
         res.status(200).json(response);
     } catch (e) {
         console.log(e);

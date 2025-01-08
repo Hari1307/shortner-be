@@ -1,10 +1,10 @@
 const passport = require("passport");
-const { user } = require("./models/shortUrl");
+const { userModel } = require("./models/shortUrl");
 
 const gStrategy = require("passport-google-oauth20").Strategy;
 
 require('dotenv').config();
-
+gStrategy.Strategy
 passport.use(new gStrategy(
     {
         clientID: process.env.CLIENT_ID,
@@ -13,14 +13,15 @@ passport.use(new gStrategy(
     },
     async (accessToken, refreshToken, profile, done) => {
         try {
-            let User = await user.findOne({ googleId: profile.id });
+            let User = await userModel.findOne({ googleId: profile.id });
             if (!User) {
-                User = await user.create({
+                User = await userModel.create({
                     googleId: profile.id,
                     email: profile.emails[0].value,
                     name: profile.displayName,
                 })
             }
+            console.log("inside passport auth success");
             done(null, User);
         } catch (e) {
             done(e, null);
@@ -29,7 +30,7 @@ passport.use(new gStrategy(
 ))
 
 passport.serializeUser((user, done) => {
-    done(null, user);
+    done(null, user.id);
 })
 
 passport.deserializeUser((user, done) => {
