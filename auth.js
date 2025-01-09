@@ -4,7 +4,7 @@ const { userModel } = require("./models/shortUrl");
 const gStrategy = require("passport-google-oauth20").Strategy;
 
 require('dotenv').config();
-gStrategy.Strategy
+
 passport.use(new gStrategy(
     {
         clientID: process.env.CLIENT_ID,
@@ -30,10 +30,18 @@ passport.use(new gStrategy(
 ))
 
 passport.serializeUser((user, done) => {
-    done(null, user.id);
+    // console.log(user+"--- from serialize user");
+    done(null, user._id);
 })
 
-passport.deserializeUser((user, done) => {
-    done(null, user);
+passport.deserializeUser(async (user, done) => {
+    try {
+        const user1 = await userModel.findById(user._id);
+        done(null, user1);
+    } catch (error) {
+        done(error, null);
+    }
 })
 
+
+module.exports = passport;

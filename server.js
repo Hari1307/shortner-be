@@ -2,29 +2,26 @@ const express = require("express");
 const session = require("express-session");
 const app = express();
 const mongoose = require("mongoose");
-const passport = require("passport");
 const uniqid = require("uniqid");
-const { isAuthenticated } = require("./middleware");
 const { shortUrlInfo, osTypeModel, deviceTypeModel } = require("./models/shortUrl");
 const { rateLimit } = require("express-rate-limit");
 const geoIp = require("geoip-lite");
 const UAParser = require('ua-parser-js');
 const cors = require("cors");
 require('dotenv').config();
+const { userModel } = require("./models/shortUrl");
 
 const swaggerUi = require("swagger-ui-express")
 const swaggerFile = require('./swagger-output.json');
 const { redis } = require("./redis");
 const MongoStore = require("connect-mongo");
 
-require('./auth');
-
+const passport = require('passport');
+const GoogleStrategy = require('passport-google-oauth20').Strategy;
 
 async function connectToMongoDB() {
     try {
         await mongoose.connect(process.env.MONGO_URL, {
-            useNewUrlParser: true,
-            useUnifiedTopology: true,
             serverSelectionTimeoutMS: 30000, // 30 seconds
         });
         console.log('Connected to MongoDB successfully');
@@ -47,21 +44,23 @@ mongoose.connection.on('disconnected', () => {
 });
 
 connectToMongoDB();
+app.set('trust proxy', 1);
+
 
 app.use(cors({
     origin: process.env.frontendUrl,
-    methods: "GET,POST,PUT,DELETE",
     credentials: true,
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization'],
 }));
 
 app.use(express.json());
 
-app.set('trust proxy', 1);
 
 const limiter = rateLimit({
     windowMs: 60 * 1000, // 1 minutes
     max: 20, // limit each IP to 20 requests per windowMs
-    message: 'Too many requests from this IP, please try again later.'
+    message: 'Too many requests from this IP, please try again later'
 });
 
 app.use(limiter);
@@ -70,119 +69,99 @@ app.use(
     session({
         secret: 'sessecret5234234',
         resave: false,
-        saveUninitialized: true,
+        saveUninitialized: false,
         store: MongoStore.create({
-            mongoUrl:process.env.MONGO_URL
-        })
+            mongoUrl:process.env.MONGO_URL,
+            ttl: 60 * 60 * 24
+        }),
+        cookie: {
+            secure: true,
+            maxAge: 1000 * 60 * 60 * 24,
+            httpOnly: true,
+            sameSite: 'none',
+        },
     })
 );
+
+passport.use(new GoogleStrategy({
+        clientID: process.env.CLIENT_ID,
+        clientSecret: process.env.CLIENT_SECRET,
+        callbackURL: process.env.CALLBACK_URL,
+        proxy: true
+    },
+    async (accessToken, refreshToken, profile, done) => {
+        try {
+            let User = await userModel.findOne({ googleId: profile.id });
+            if (!User) {
+                User = await userModel.create({
+                    googleId: profile.id,
+                    email: profile.emails[0].value,
+                    name: profile.displayName,
+                })
+            }
+            console.log("inside passport auth success");
+            return done(null, User);
+        } catch (e) {
+            return done(e, null);
+        }
+    }
+))
+
+passport.serializeUser((user, done) => {
+    return done(null, user._id || user.id);
+})
+
+passport.deserializeUser(async (user, done) => {
+    try {
+        const user1 = await userModel.findById(user._id);
+        return done(null, user1);
+    } catch (error) {
+        return done(error, null);
+    }
+})
+
+
 app.use(passport.initialize());
 app.use(passport.session());
 
-app.get('/', (req, res) => {
-    const loginLink = `<a href="/auth/google">Sign in with Google</a>`;
-    res.send(loginLink);
-});
-
 app.get(
     '/auth/google',
-    passport.authenticate('google', { scope: ['profile', 'email'] })
+    passport.authenticate('google', { scope: ['profile', 'email'] ,prompt: 'select_account'})
 );
-
-// app.get("/login/success", (req, res) => {
-//     if (req.user) {
-//         console.log("inside login success api")
-//         res.status(200).json({
-//             success: true,
-//             message: "Successfully logged in",
-//             user: req.user
-//         })
-//     }
-// })
-
-const home = process.env.frontendUrl + "/home";
 
 app.get(
     '/auth/google/callback',
     passport.authenticate('google', {
-        // successRedirect: home,
-        failureRedirect: '/'
+        failureRedirect: process.env.frontendUrl,
+        session: true,
+        failureMessage: true
     }),
     (req, res) => {
         console.log("inside google callback entry");
-        res.redirect(process.env.frontendUrl + "/home");
+        req.session.save((err) => {
+            if (err) {
+                console.error('Session save error:', err);
+                return res.redirect(process.env.frontendUrl);
+            }
+            res.redirect(process.env.frontendUrl + "/home");
+        });
     }
 );
 
-app.get("/api/user", (req, res) => {
-    console.log("inside api/home api ")
+const isAuthenticated = (req, res, next) => {
     if (req.isAuthenticated()) {
-        res.json( req.user );
-    } else {
-        res.status(401).json({ error: "Unauthorized" });
+        return next();
     }
-});
-
-
-app.post("/api/shorten", isAuthenticated, async (req, res) => {
-    try {
-        const { fullUrl, customAlias, topic } = req.body;
-        const userId = req.user?._id;
-        const userIp = req.headers['x-forwarded-for']?.split(',')[0] || req.connection.remoteAddress;
-
-        if (!fullUrl) {
-            return res.status(400).json({ error: 'Full URL is required' });
-        }
-
-        const newAlias = customAlias || uniqid();
-        const shortUrl = `https://shortner-app.onrender.com/api/shorten/${newAlias}`;
-
-        const existingUrl = await shortUrlInfo.findOne({ shortUrl });
-        if (existingUrl) {
-            return res.status(409).json({ error: 'This short URL already exists. Please try again.' });
-        }
-
-        const data = {
-            fullUrl,
-            topic,
-            userId,
-            userIp,
-            alias: newAlias,
-            shortUrl
-        };
-
-        const shortenUrl = await shortUrlInfo.create(data);
-
-        const response = {
-            shortUrl: shortenUrl.shortUrl,
-            createdAt: shortenUrl.createdAt,
-        };
-
-        res.status(201).json(response);
-    } catch (e) {
-        res.status(404).json(e);
-    }
-});
-
-app.get("/api/shorten", isAuthenticated,async (req, res) => {
-    try {
-                console.log("fetching content data success")
-        const response = await shortUrlInfo.find()
-            .populate({
-                path: "osAnalytics",
-                select: "osName uniqueClicks uniqueUsers"
-            })
-            .populate({
-                path: "deviceAnalytics",
-                select: "deviceName uniqueClicks uniqueUsers"
-            })
-        console.log("fetching content data success")
-        res.status(200).json(response);
-    } catch (e) {
-        console.log(e);
-        res.status(404).json({ error: e.message })
-    }
-})
+    console.log('Authentication failed:', {
+        session: !!req.session,
+        user: !!req.user,
+        isAuthenticated: req.isAuthenticated()
+    });
+    res.status(401).json({ 
+        error: 'Unauthorized',
+        redirectUrl: process.env.frontendUrl 
+    });
+};
 
 const updateAnalytics = async (req, alias) => {
     try {
@@ -248,10 +227,74 @@ const updateAnalytics = async (req, alias) => {
 
         await shortUrls.save();
     } catch (e) {
-        console.error("Error updating analytics:", e);
-        // res.status(404).json(e);
+        // console.error("Error updating analytics:", e);
+        res.status(404).json(e);
     }
 }
+
+app.post("/api/shorten",isAuthenticated, async (req, res) => {
+    try {
+        console.log("inside post content");
+        const { fullUrl, customAlias, topic } = req.body;
+        const userId = req.user?._id;
+        const userIp = req.ips.length ? req.ips[0] : req.ip;
+        
+        if (!fullUrl) {
+            return res.status(400).json({ error: 'Full URL is required' });
+        }
+
+        const newAlias = customAlias || uniqid();
+        const shortUrl = `https://shortner-app.onrender.com/api/shorten/${newAlias}`;
+
+        const existingUrl = await shortUrlInfo.findOne({ shortUrl });
+        if (existingUrl) {
+            return res.status(409).json({ error: 'This short URL already exists. Please try again.' });
+        }
+
+        const data = {
+            fullUrl,
+            topic,
+            userId,
+            userIp,
+            alias: newAlias,
+            shortUrl
+        };
+
+        const shortenUrl = await shortUrlInfo.create(data);
+
+        const response = {
+            shortUrl: shortenUrl.shortUrl,
+            createdAt: shortenUrl.createdAt,
+        };
+        console.log("successfully added shorturl content in db");
+        res.status(201).json(response);
+    } catch (e) {
+        res.status(404).json(e);
+    }
+});
+
+app.get("/api/shorten", isAuthenticated,async (req, res) => {
+    try {
+        // console.log("fetching content data success")
+        const userId = req.user?._id;
+        const response = await shortUrlInfo.find({userId})
+            .populate({
+                path: "osAnalytics",
+                select: "osName uniqueClicks uniqueUsers"
+            })
+            .populate({
+                path: "deviceAnalytics",
+                select: "deviceName uniqueClicks uniqueUsers"
+            })
+        // console.log("fetching content data success")
+        res.status(200).json(response);
+    } catch (e) {
+        // console.log(e);
+        res.status(404).json({ error: e.message })
+    }
+})
+
+
 
 app.get("/api/shorten/:alias", isAuthenticated, async (req, res) => {
     try {
@@ -260,7 +303,7 @@ app.get("/api/shorten/:alias", isAuthenticated, async (req, res) => {
         const alias = req.params.alias;
 
         if (cachedFullUrl) {
-            console.log("cache hit for shorUrl", shortUrl);
+            // console.log("cache hit for shorUrl", shortUrl);
             updateAnalytics(req, alias);
             return res.status(302).redirect(cachedFullUrl);
         }
@@ -270,7 +313,7 @@ app.get("/api/shorten/:alias", isAuthenticated, async (req, res) => {
         if (shortUrls === null)
             return res.sendStatus(404);
 
-        console.log("cache miss for shortUrl");
+        // console.log("cache miss for shortUrl");
 
         await redis.set(shortUrl, shortUrls.fullUrl, "EX", 300);
 
@@ -278,7 +321,7 @@ app.get("/api/shorten/:alias", isAuthenticated, async (req, res) => {
 
         res.status(302).redirect(shortUrls.fullUrl);
     } catch (e) {
-        console.log(e)
+        // console.log(e)
         res.status(404).json(e);
     }
 })
@@ -372,8 +415,6 @@ app.get("/api/overallAnalytics", isAuthenticated, async (req, res) => {
             osType: reducedResponse.osAnalytics,
             deviceType: reducedResponse.deviceAnalytics
         }
-        console.log("-------------------");
-        console.log(response);
         res.status(200).json(response);
     } catch (e) {
         res.status(404).json(e.message);
@@ -382,6 +423,7 @@ app.get("/api/overallAnalytics", isAuthenticated, async (req, res) => {
 
 
 app.use('/api-docs', swaggerUi.serve, swaggerUi.setup(swaggerFile))
+
 
 app.listen(process.env.PORT || 3000, () => {
     console.log("server started in port 3000");
